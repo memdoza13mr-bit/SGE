@@ -7,17 +7,24 @@ if (!isset($_SESSION['usuario_id']) || $_SESSION['rol'] != 'coordinador') {
     exit();
 }
 
-function volverConError($mensaje) {
+function volverConError($mensaje, $postData = []) {
     $_SESSION['error_reserva'] = $mensaje;
+    $_SESSION['form_reserva'] = $postData;
     header("Location: nueva_reserva.php");
     exit();
 }
 
-$coordinador_id = (int)$_SESSION['usuario_id'];
+$coordinador_id = (int)($_SESSION['usuario_id'] ?? 0);
 
 /* FECHA AUTOMÁTICA DEL SERVIDOR */
 $fecha_entrega_formato = date('Y-m-d');
 
+/* VALIDAR MÉTODO */
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    volverConError("Método de envío no válido.");
+}
+
+/* CAPTURA Y NORMALIZACIÓN DE DATOS */
 $folio_coordinador = trim($_POST['folio_coordinador'] ?? '');
 $tipo_actividad = trim($_POST['tipo_actividad'] ?? '');
 $nombre_actividad = trim($_POST['nombre_actividad'] ?? '');
@@ -26,13 +33,13 @@ $asignatura = trim($_POST['asignatura'] ?? '');
 $docente_responsable = trim($_POST['docente_responsable'] ?? '');
 $coordinador_responsable = trim($_POST['coordinador_responsable'] ?? '');
 
-$espacios = $_POST['espacio_id'] ?? [];
-$fechas = $_POST['fecha'] ?? [];
-$hora_inicio = $_POST['hora_inicio'] ?? [];
-$hora_fin = $_POST['hora_fin'] ?? [];
-$requerimientos = $_POST['requerimientos'] ?? [];
+$espacios = isset($_POST['espacio_id']) && is_array($_POST['espacio_id']) ? $_POST['espacio_id'] : [];
+$fechas = isset($_POST['fecha']) && is_array($_POST['fecha']) ? $_POST['fecha'] : [];
+$hora_inicio = isset($_POST['hora_inicio']) && is_array($_POST['hora_inicio']) ? $_POST['hora_inicio'] : [];
+$hora_fin = isset($_POST['hora_fin']) && is_array($_POST['hora_fin']) ? $_POST['hora_fin'] : [];
+$requerimientos = isset($_POST['requerimientos']) && is_array($_POST['requerimientos']) ? $_POST['requerimientos'] : [];
 
-$lic_cuat = $_POST['lic_cuat'] ?? [];
+$lic_cuat = isset($_POST['lic_cuat']) && is_array($_POST['lic_cuat']) ? $_POST['lic_cuat'] : [];
 
 /* DATOS GENERALES */
 $cantidad_alumnos_general = (int)($_POST['cantidad_alumnos_general'] ?? 0);
@@ -44,6 +51,39 @@ $promocion_general = trim($_POST['promocion_redes_general'] ?? 'no');
 $obs_general = trim($_POST['observaciones_general'] ?? '');
 $material_general = trim($_POST['material_requerido_general'] ?? '');
 
+/* GUARDAR POST ORIGINAL PARA REPINTAR FORMULARIO SI HAY ERROR */
+$formData = $_POST;
+
+/* VALIDACIONES BÁSICAS */
+if (
+    $folio_coordinador === '' ||
+    $tipo_actividad === '' ||
+    $nombre_actividad === '' ||
+    $objetivo === '' ||
+    $asignatura === '' ||
+    $docente_responsable === '' ||
+    $coordinador_responsable === ''
+) {
+    volverConError("Debes capturar todos los datos generales del formato.", $formData);
+}
+
+if (!is_array($espacios) || count($espacios) === 0) {
+    volverConError("Debes agregar al menos un espacio.", $formData);
+}
+
+if ($cantidad_alumnos_general <= 0) {
+    volverConError("La cantidad total de alumnos debe ser mayor a 0.", $formData);
+}
+
+if (
+    count($espacios) !== count($fechas) ||
+    count($espacios) !== count($hora_inicio) ||
+    count($espacios) !== count($hora_fin) ||
+    count($espacios) !== count($requerimientos)
+) {
+    volverConError("Los datos de espacios, horarios o requerimientos están incompletos.", $formData);
+}
+
 /* LICENCIATURAS PERMITIDAS */
 $sqlLicPermitidas = "SELECT licenciatura
                      FROM coordinador_licenciaturas
@@ -51,7 +91,7 @@ $sqlLicPermitidas = "SELECT licenciatura
 $stmtLicPermitidas = $conexion->prepare($sqlLicPermitidas);
 
 if (!$stmtLicPermitidas) {
-    volverConError("No se pudieron validar las licenciaturas permitidas.");
+    volverConError("No se pudieron validar las licenciaturas permitidas.", $formData);
 }
 
 $stmtLicPermitidas->bind_param("i", $coordinador_id);
@@ -63,38 +103,13 @@ while ($filaLic = $resLicPermitidas->fetch_assoc()) {
     $licPermitidas[] = $filaLic['licenciatura'];
 }
 
-/* VALIDACIONES GENERALES */
-if (
-    $folio_coordinador === '' ||
-    $tipo_actividad === '' ||
-    $nombre_actividad === '' ||
-    $objetivo === '' ||
-    $asignatura === '' ||
-    $docente_responsable === '' ||
-    $coordinador_responsable === ''
-) {
-    volverConError("Debes capturar todos los datos generales del formato.");
-}
-
-if (!is_array($espacios) || count($espacios) === 0) {
-    volverConError("Debes agregar al menos un espacio.");
-}
-
-if ($cantidad_alumnos_general <= 0) {
-    volverConError("La cantidad total de alumnos debe ser mayor a 0.");
-}
-
-if (
-    count($espacios) !== count($fechas) ||
-    count($espacios) !== count($hora_inicio) ||
-    count($espacios) !== count($hora_fin) ||
-    count($espacios) !== count($requerimientos)
-) {
-    volverConError("Los datos de espacios, horarios o requerimientos están incompletos.");
+if (count($licPermitidas) === 0) {
+    volverConError("Tu usuario no tiene licenciaturas permitidas asignadas.", $formData);
 }
 
 $fechaMinima = date('Y-m-d', strtotime('+10 days'));
 
+/* PREPARAR CONSULTAS */
 $sqlConflicto = "SELECT rd.id, e.nombre AS espacio
                  FROM reserva_detalles rd
                  INNER JOIN espacios e ON rd.espacio_id = e.id
@@ -108,19 +123,21 @@ $sqlConflicto = "SELECT rd.id, e.nombre AS espacio
 $stmtConflicto = $conexion->prepare($sqlConflicto);
 
 if (!$stmtConflicto) {
-    volverConError("No se pudo validar conflictos de horario.");
+    volverConError("No se pudo validar conflictos de horario.", $formData);
 }
 
 $sqlEspacio = "SELECT nombre, minimo_alumnos, maximo_alumnos
                FROM espacios
                WHERE id = ?
                LIMIT 1";
+
 $stmtEspacio = $conexion->prepare($sqlEspacio);
 
 if (!$stmtEspacio) {
-    volverConError("No se pudo validar la información de los espacios.");
+    volverConError("No se pudo validar la información de los espacios.", $formData);
 }
 
+/* VALIDAR ESPACIOS */
 for ($i = 0; $i < count($espacios); $i++) {
     $espacio_id = (int)($espacios[$i] ?? 0);
     $fecha = trim($fechas[$i] ?? '');
@@ -129,19 +146,23 @@ for ($i = 0; $i < count($espacios); $i++) {
     $cant = $cantidad_alumnos_general;
 
     if ($espacio_id <= 0 || $fecha === '' || $inicio === '' || $fin === '') {
-        volverConError("Todos los espacios deben tener espacio, fecha, hora de inicio y hora fin.");
+        volverConError("Todos los espacios deben tener espacio, fecha, hora de inicio y hora fin.", $formData);
+    }
+
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $fecha)) {
+        volverConError("Hay una fecha inválida en uno de los espacios.", $formData);
     }
 
     if ($fecha < $fechaMinima) {
-        volverConError("Las reservas solo pueden hacerse a partir de 10 días después de la fecha actual.");
+        volverConError("Las reservas solo pueden hacerse a partir de 10 días después de la fecha actual.", $formData);
     }
 
-    if (strtotime($inicio) === false || strtotime($fin) === false) {
-        volverConError("Hay un formato de hora inválido en uno de los espacios.");
+    if (!preg_match('/^\d{2}:\d{2}$/', $inicio) || !preg_match('/^\d{2}:\d{2}$/', $fin)) {
+        volverConError("Hay un formato de hora inválido en uno de los espacios.", $formData);
     }
 
     if (strtotime($inicio) >= strtotime($fin)) {
-        volverConError("La hora de inicio debe ser menor que la hora de fin en todos los espacios.");
+        volverConError("La hora de inicio debe ser menor que la hora de fin en todos los espacios.", $formData);
     }
 
     $stmtEspacio->bind_param("i", $espacio_id);
@@ -149,7 +170,7 @@ for ($i = 0; $i < count($espacios); $i++) {
     $datosEspacio = $stmtEspacio->get_result()->fetch_assoc();
 
     if (!$datosEspacio) {
-        volverConError("Uno de los espacios seleccionados no existe.");
+        volverConError("Uno de los espacios seleccionados no existe.", $formData);
     }
 
     $nombreEspacio = $datosEspacio['nombre'] ?? 'Espacio';
@@ -157,26 +178,29 @@ for ($i = 0; $i < count($espacios); $i++) {
     $maxEspacio = isset($datosEspacio['maximo_alumnos']) ? (int)$datosEspacio['maximo_alumnos'] : 0;
 
     if ($minEspacio > 0 && $cant < $minEspacio) {
-        volverConError("La cantidad de alumnos para el espacio '" . $nombreEspacio . "' no puede ser menor a " . $minEspacio . ".");
+        volverConError("La cantidad de alumnos para el espacio '{$nombreEspacio}' no puede ser menor a {$minEspacio}.", $formData);
     }
 
     if ($maxEspacio > 0 && $cant > $maxEspacio) {
-        volverConError("La cantidad de alumnos para el espacio '" . $nombreEspacio . "' no puede ser mayor a " . $maxEspacio . ".");
+        volverConError("La cantidad de alumnos para el espacio '{$nombreEspacio}' no puede ser mayor a {$maxEspacio}.", $formData);
     }
 
     $stmtConflicto->bind_param("isss", $espacio_id, $fecha, $inicio, $fin);
     $stmtConflicto->execute();
     $conflicto = $stmtConflicto->get_result();
 
-    if ($conflicto->num_rows > 0) {
+    if ($conflicto && $conflicto->num_rows > 0) {
         $dato = $conflicto->fetch_assoc();
-        volverConError("Conflicto detectado: el espacio '" . $dato['espacio'] . "' ya está reservado o pendiente en la fecha " . $fecha . " dentro de ese horario.");
+        volverConError(
+            "Conflicto detectado: el espacio '{$dato['espacio']}' ya está reservado o pendiente en la fecha {$fecha} dentro de ese horario.",
+            $formData
+        );
     }
 }
 
 /* VALIDAR LICENCIATURAS GENERALES */
 if (!is_array($lic_cuat) || count($lic_cuat) === 0) {
-    volverConError("Debes agregar al menos una licenciatura con su cuatrimestre.");
+    volverConError("Debes agregar al menos una licenciatura con su cuatrimestre.", $formData);
 }
 
 foreach ($lic_cuat as $par) {
@@ -184,11 +208,11 @@ foreach ($lic_cuat as $par) {
     $cuat = trim($par['cuatrimestre'] ?? '');
 
     if ($lic === '' || $cuat === '') {
-        volverConError("Cada pareja de licenciatura y cuatrimestre debe estar completa.");
+        volverConError("Cada pareja de licenciatura y cuatrimestre debe estar completa.", $formData);
     }
 
     if (!in_array($lic, $licPermitidas, true)) {
-        volverConError("La licenciatura '" . $lic . "' no está permitida para tu usuario.");
+        volverConError("La licenciatura '{$lic}' no está permitida para tu usuario.", $formData);
     }
 }
 
@@ -197,12 +221,20 @@ $licenciaturasTexto = [];
 $cuatrimestresTexto = [];
 
 foreach ($lic_cuat as $par) {
-    $licenciaturasTexto[] = trim($par['licenciatura'] ?? '');
-    $cuatrimestresTexto[] = trim($par['cuatrimestre'] ?? '');
+    $lic = trim($par['licenciatura'] ?? '');
+    $cuat = trim($par['cuatrimestre'] ?? '');
+
+    if ($lic !== '') {
+        $licenciaturasTexto[] = $lic;
+    }
+
+    if ($cuat !== '') {
+        $cuatrimestresTexto[] = $cuat;
+    }
 }
 
-$licenciaturas_val = implode(", ", array_filter($licenciaturasTexto));
-$cuatrimestres_val = implode(", ", array_filter($cuatrimestresTexto));
+$licenciaturas_val = implode(", ", $licenciaturasTexto);
+$cuatrimestres_val = implode(", ", $cuatrimestresTexto);
 
 $conexion->begin_transaction();
 
@@ -312,12 +344,13 @@ try {
 
     $conexion->commit();
 
+    unset($_SESSION['form_reserva']);
     $_SESSION['ok_reserva'] = "La reserva se guardó correctamente.";
     header("Location: mis_reservas.php");
     exit();
 
 } catch (Exception $e) {
     $conexion->rollback();
-    volverConError($e->getMessage());
+    volverConError($e->getMessage(), $formData);
 }
 ?>

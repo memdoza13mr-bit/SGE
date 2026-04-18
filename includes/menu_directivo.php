@@ -6,6 +6,8 @@ if (!isset($titulo_pagina)) {
 if (!isset($menu_activo)) {
     $menu_activo = '';
 }
+
+$nombreMostrar = trim($_SESSION['nombre_completo'] ?? ($_SESSION['nombre'] ?? 'Usuario'));
 ?>
 
 <header class="topbar">
@@ -16,15 +18,16 @@ if (!isset($menu_activo)) {
 
         <a href="../directivo/dashboard.php" class="logo-area">
             <img src="../assets/img/Logo.jpeg" class="logo-img" alt="Logo">
-            <div class="logo-text"><?php echo htmlspecialchars($titulo_pagina); ?></div>
+            <div class="logo-text"><?php echo htmlspecialchars($titulo_pagina, ENT_QUOTES, 'UTF-8'); ?></div>
         </a>
     </div>
 </header>
 
 <div class="layout sidebar-collapsed" id="layoutPrincipal">
     <aside class="sidebar" id="sidebarPrincipal">
-        <div class="sidebar-user">
-            <span><?php echo htmlspecialchars($_SESSION['nombre'] ?? ''); ?></span>
+        <div class="sidebar-user" title="<?php echo htmlspecialchars($nombreMostrar, ENT_QUOTES, 'UTF-8'); ?>">
+            <span class="sidebar-user-saludo">Bienvenido</span>
+            <span class="sidebar-user-nombre"><?php echo htmlspecialchars($nombreMostrar, ENT_QUOTES, 'UTF-8'); ?></span>
         </div>
 
         <nav class="menu-iconos">
